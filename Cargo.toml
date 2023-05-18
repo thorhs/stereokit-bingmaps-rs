@@ -1,0 +1,100 @@
+[package]
+name = "quake-in-my-boots"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+#stereokit = "0.16.2"
+stereokit = { path = "../stereokit-rs", version = "0.16.2" }
+stereokit-sys = { path = "../stereokit-sys" }
+macro_rules_attribute = "0.1.3"
+glam = "0.23.0"
+anyhow = "1.0.71"
+num = "0.4.0"
+reqwest = { version = "0.11.17", features = ["json", "serde_json"] }
+derive_more = { git = "https://github.com/JelteF/derive_more.git", features = ["display"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+bytes = "1"
+serde = { version = "1.0.163", features = ["serde_derive"] }
+once_cell = "1.17.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-glue = {version = "0.7.0", features = ["logger", "android_logger"]}
+ndk = "0.7.0"
+
+[package.metadata.android]
+apk_label = "Quiz Saber"
+fullscreen = true
+runtime_libs = "./common_lib"
+target_sdk_version = 29
+assets = "./assets"
+
+[package.metadata.android.application]
+debuggable = true
+label = "Quiz Saber"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.handtracking.version"
+value = "V2.0"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.ossplash"
+value = "true"
+
+
+#[package.metadata.android.application.activity]
+#config_changes = "screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode"
+#launch_mode = "singleTask"
+#orientation = "landscape"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.access_network_state"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.supportedDevices"
+value = "quest|quest2"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.intent.category.VR"
+value = "vr_only"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["com.oculus.intent.category.VR", "android.intent.category.LAUNCHER"]
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "com.oculus.vr.focusaware"
+value = "true"
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vulkan.level"
+required = true
+version = 1
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vr.headtracking"
+required = true
+version = 1
+
+[[package.metadata.android.uses_feature]]
+name = "oculus.software.handtracking"
+required = true
+version = 1
+
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.HAND_TRACKING"
+required = true
+version = 1
+
+[package.metadata.android.signing.release]
+path = "./hotham_examples.keystore"
+keystore_password = "chomsky-vigilant-spa"
