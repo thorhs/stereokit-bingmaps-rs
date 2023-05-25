@@ -16,6 +16,8 @@ mod ui;
 use bing_api::BoundingBox;
 use terrain::*;
 
+use skjalftalisa::{get_quakes, request::SkjalftalisaRequest, response::SkjalftalisaResponse};
+
 /*
 #[derive(Debug)]
 struct ImgRequest {
@@ -32,14 +34,16 @@ struct ElevRequest {
 static VEC3_UP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 static VEC3_FORWARD: Vec3 = Vec3::new(0.0, 0.0, -1.0);
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 enum BingRequest {
     Location(bing::ImageryType, usize),
+    Quakes(SkjalftalisaRequest),
 }
 
 #[derive(Debug, Clone)]
 enum BingResponse {
     Location(((bytes::Bytes, Vec3, Vec2), (Vec<f32>, Vec3, Vec2))),
+    Quakes(SkjalftalisaResponse),
 }
 
 async fn bing_fetch_loop(
@@ -47,12 +51,12 @@ async fn bing_fetch_loop(
     request_rx: &mut Receiver<BingRequest>,
     result_tx: &Sender<BingResponse>,
 ) {
-    let mut cache: HashMap<BingRequest, BingResponse> = HashMap::new();
+    let mut cache: HashMap<(bing::ImageryType, usize), BingResponse> = HashMap::new();
     while let Some(req) = request_rx.recv().await {
         match req {
             BingRequest::Location(img_type, location_id) => {
                 dbg!("Requesting {} at location {}", &img_type, &location_id);
-                if let Some(resp) = cache.get(&req) {
+                if let Some(resp) = cache.get(&(img_type, location_id)) {
                     result_tx
                         .send(resp.to_owned())
                         .await
@@ -71,11 +75,19 @@ async fn bing_fetch_loop(
                     .expect("Error retreiving bing image data");
 
                 let resp = BingResponse::Location((img_resp, elev_resp));
-                cache.insert(req, resp.clone());
+                cache.insert((img_type, location_id), resp.clone());
                 result_tx
                     .send(resp)
                     .await
-                    .expect("Error sendit bing texture response");
+                    .expect("Error sending bing texture response");
+            }
+            BingRequest::Quakes(_req) => {
+                let resp = skjalftalisa::response::demo_data().expect("Unable to get demo data");
+
+                result_tx
+                    .send(BingResponse::Quakes(resp))
+                    .await
+                    .expect("Error sending quakes response");
             }
         }
     }
