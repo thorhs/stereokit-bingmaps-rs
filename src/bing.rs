@@ -113,9 +113,9 @@ impl BingSession {
             anyhow::bail!("Unexpected number of resources returned when fetching metadata data, expected 1 got {}", metadata_sets.resources.len());
         }
 
-        let metadatas = metadata_sets.resources.get(0).unwrap();
+        let metadata_set = metadata_sets.resources.get(0).unwrap();
 
-        let bbox = metadatas.bbox.clone();
+        let bbox = metadata_set.bbox.clone();
         let region_bounds: BoundingBox = dbg!(bbox).try_into()?;
 
         let (size, center) = crate::geo::bounds_to_world(region_bounds.clone(), region_bounds);

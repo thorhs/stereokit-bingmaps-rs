@@ -83,7 +83,7 @@ pub(crate) struct ElevationResponse {
     pub(crate) traceId: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct BoundingBox {
     pub east_longitude: f64,
     pub west_longitude: f64,
@@ -96,6 +96,13 @@ impl BoundingBox {
         Vec2 {
             x: ((self.west_longitude + self.east_longitude) / 2.0) as f32,
             y: ((self.north_latitude + self.south_latitude) / 2.0) as f32,
+        }
+    }
+
+    pub fn size(&self) -> Vec2 {
+        Vec2 {
+            x: ((self.west_longitude - self.east_longitude) as f32).abs(),
+            y: ((self.north_latitude - self.south_latitude) as f32).abs(),
         }
     }
 }
@@ -119,6 +126,7 @@ impl TryFrom<Vec<f64>> for BoundingBox {
         }
 
         Ok(BoundingBox {
+            #[allow(clippy::get_first)]
             south_latitude: *value.get(0).unwrap(),
             west_longitude: *value.get(1).unwrap(),
             north_latitude: *value.get(2).unwrap(),

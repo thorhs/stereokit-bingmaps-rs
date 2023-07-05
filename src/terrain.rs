@@ -192,6 +192,8 @@ impl Terrain {
 
         sk.material_set_float(&self.material, "world_height", sizes.y);
 
+        sk.material_set_transparency(&self.material, stereokit::Transparency::Add);
+
         self.chunks.iter().for_each(|c| {
             sk.render_add_mesh(
                 &self.mesh,

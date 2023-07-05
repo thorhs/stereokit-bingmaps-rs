@@ -7,14 +7,21 @@ use crate::bing::BingSession;
 
 use tokio::runtime::Runtime;
 
+use ::geo as geo_rs;
+use ::geo::BoundingRect;
+
 mod bing;
 mod bing_api;
 mod geo;
+mod quakes;
 mod terrain;
 mod ui;
+mod world_calculator;
 
 use bing_api::BoundingBox;
+use quakes::Quakes;
 use terrain::*;
+use world_calculator::WorldCalculator;
 
 use skjalftalisa::{get_quakes, request::SkjalftalisaRequest, response::SkjalftalisaResponse};
 
@@ -37,7 +44,7 @@ static VEC3_FORWARD: Vec3 = Vec3::new(0.0, 0.0, -1.0);
 #[derive(Debug)]
 enum BingRequest {
     Location(bing::ImageryType, usize),
-    Quakes(SkjalftalisaRequest),
+    Quakes(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +55,7 @@ enum BingResponse {
 
 async fn bing_fetch_loop(
     session: BingSession,
+    quake_session: reqwest::Client,
     request_rx: &mut Receiver<BingRequest>,
     result_tx: &Sender<BingResponse>,
 ) {
@@ -55,7 +63,6 @@ async fn bing_fetch_loop(
     while let Some(req) = request_rx.recv().await {
         match req {
             BingRequest::Location(img_type, location_id) => {
-                dbg!("Requesting {} at location {}", &img_type, &location_id);
                 if let Some(resp) = cache.get(&(img_type, location_id)) {
                     result_tx
                         .send(resp.to_owned())
@@ -65,12 +72,12 @@ async fn bing_fetch_loop(
                 }
                 let location = LOCATIONS.get(location_id).expect("Location not found");
                 let img_resp = session
-                    .request_image_and_data(&img_type, location)
+                    .request_image_and_data(&img_type, &polygon_to_boundingbox(location))
                     .await
                     .expect("Error retreiving bing image data");
 
                 let elev_resp = session
-                    .request_elevation(location)
+                    .request_elevation(&polygon_to_boundingbox(location))
                     .await
                     .expect("Error retreiving bing image data");
 
@@ -81,8 +88,19 @@ async fn bing_fetch_loop(
                     .await
                     .expect("Error sending bing texture response");
             }
-            BingRequest::Quakes(_req) => {
-                let resp = skjalftalisa::response::demo_data().expect("Unable to get demo data");
+            BingRequest::Quakes(location_id) => {
+                // let resp = skjalftalisa::response::demo_data().expect("Unable to get demo data");
+                let location = LOCATIONS.get(location_id).expect("Location not found");
+                let req = skjalftalisa::request::SkjalftalisaRequest::new(location.to_owned())
+                    .with_time(
+                        chrono::Utc::now() - chrono::Duration::weeks(12),
+                        chrono::Utc::now(),
+                    )
+                    .with_size(0, 7);
+
+                let resp = skjalftalisa::get_quakes(&quake_session, &req)
+                    .await
+                    .expect("Error fetching quakes from skjalftalisa");
 
                 result_tx
                     .send(BingResponse::Quakes(resp))
@@ -103,13 +121,14 @@ pub fn main() {
     println!("Hello World");
 
     let session = BingSession::new();
+    let quake_session = reqwest::Client::new();
 
     let rt = Runtime::new().unwrap();
 
     let (req_tx, mut req_rx) = tokio::sync::mpsc::channel(10);
     let (resp_tx, resp_rx) = tokio::sync::mpsc::channel(10);
 
-    rt.spawn(async move { bing_fetch_loop(session, &mut req_rx, &resp_tx).await });
+    rt.spawn(async move { bing_fetch_loop(session, quake_session, &mut req_rx, &resp_tx).await });
 
     let mut sk = SettingsBuilder::new()
         .assets_folder("assets")
@@ -124,18 +143,39 @@ pub fn main() {
     main._main(sk).unwrap();
 }
 
-static LOCATIONS: once_cell::sync::Lazy<Vec<BoundingBox>> = once_cell::sync::Lazy::new(|| {
-    vec![
-        geo::lat_lon_bounds(22.0, -159.5, 20000.0),
-        geo::lat_lon_bounds(36.3, -112.75, 10000.0),
-        geo::lat_lon_bounds(27.98, 86.92, 10000.0),
-        geo::lat_lon_bounds(-13.16, -72.54, 10000.0),
-    ]
+static LOCATIONS: once_cell::sync::Lazy<Vec<geo_rs::Polygon>> = once_cell::sync::Lazy::new(|| {
+    vec![geo_rs::Polygon::new(
+        geo_rs::LineString::from(vec![
+            (-18.589553916826844, 67.14815809664168),
+            (-20.204544151201848, 66.08886951976677),
+            (-18.084182823076848, 65.68945088379868),
+            (-16.040725791826848, 66.23539315614204),
+        ]),
+        vec![],
+    )]
 });
+
+fn polygon_to_boundingbox(poly: &geo_rs::Polygon) -> BoundingBox {
+    let bounding_rect = poly.bounding_rect().unwrap_or(geo_rs::Rect::new(
+        geo_rs::coord!(x: 0.0, y: 0.0),
+        geo_rs::coord!(x: 0.0, y: 0.0),
+    ));
+
+    let min = bounding_rect.min();
+    let max = bounding_rect.max();
+
+    BoundingBox {
+        east_longitude: max.x,
+        west_longitude: min.x,
+        north_latitude: max.y,
+        south_latitude: min.y,
+    }
+}
 
 struct Main {
     terrain_scale: f32,
     terrain: Terrain,
+    quakes: Quakes,
     drag_active: bool,
     req_tx: Sender<BingRequest>,
     resp_rx: Receiver<BingResponse>,
@@ -151,6 +191,7 @@ struct Main {
     map_color_size: Vec3,
     map_color_center: Vec2,
     ui_angle: f32,
+    quake_list: skjalftalisa::response::SkjalftalisaResponse,
 }
 
 impl Main {
@@ -160,8 +201,9 @@ impl Main {
         resp_rx: Receiver<BingResponse>,
     ) -> anyhow::Result<Main> {
         Ok(Main {
-            terrain_scale: 0.00004f32,
+            terrain_scale: 0.000004f32,
             terrain: Terrain::new(sk, 64, 0.6, 2).unwrap(),
+            quakes: Quakes::new(sk).unwrap(),
             drag_active: false,
             req_tx,
             resp_rx,
@@ -177,6 +219,7 @@ impl Main {
             map_color_size: Default::default(),
             map_color_center: Default::default(),
             ui_angle: 0.0,
+            quake_list: Default::default(),
         })
     }
 
@@ -185,10 +228,12 @@ impl Main {
         sk: &T,
         location_id: Option<usize>,
     ) -> anyhow::Result<()> {
-        dbg!(location_id);
         if location_id == self.location_id {
             return Ok(());
         }
+
+        let mut world_calculator: Option<WorldCalculator> = None;
+
         self.location_id = location_id;
 
         let terrain: &mut Terrain = &mut self.terrain;
@@ -247,6 +292,64 @@ impl Main {
 
             self.map_height_center = height_center;
             self.map_height_size = height_size;
+
+            let world_bounds = polygon_to_boundingbox(LOCATIONS.get(location_id.unwrap()).unwrap());
+
+            dbg!(tex_center);
+            dbg!(tex_size);
+            dbg!(self.terrain_scale);
+            dbg!(&world_bounds);
+            world_calculator = Some(WorldCalculator::new(world_bounds, 1.0, 0.1, 0.002));
+            dbg!(&world_calculator);
+            dbg!(world_calculator.as_ref().map(|w| w.project_real(
+                Vec2 {
+                    x: -17.998138,
+                    y: 66.54361,
+                },
+                1.0
+            )));
+        } else {
+            anyhow::bail!("Unable to fetch location data");
+        }
+
+        self.req_tx
+            .blocking_send(BingRequest::Quakes(location_id.unwrap()))
+            .expect("Unable to send bing request");
+
+        if let BingResponse::Quakes(quakes) = self
+            .resp_rx
+            .blocking_recv()
+            .expect("Unable to fetch quake data")
+        {
+            // self.quake_list = quakes;
+
+            self.quakes.set_world_calculator(world_calculator.unwrap());
+
+            // Converts from columnar data to Quakes
+            self.quakes.set_local_position(Vec3::ZERO);
+            self.quakes.set_quakes(quakes.data.iter().collect());
+            /* self.quakes.set_quakes(vec![
+                // Grimsey
+                skjalftalisa::response::Quake {
+                    depth: 0.0,
+                    lat: 66.54361,
+                    long: -17.998138,
+                    magnitude: 10.0,
+                    magnitude_type: "".to_owned(),
+                    originating_system: "".to_owned(),
+                    time: 0,
+                },
+                // Center
+                skjalftalisa::response::Quake {
+                    depth: 0.0,
+                    lat: 66.41881,
+                    long: -18.122653,
+                    magnitude: 5.0,
+                    magnitude_type: "".to_owned(),
+                    originating_system: "".to_owned(),
+                    time: 0,
+                },
+            ]); */
         } else {
             anyhow::bail!("Unable to fetch location data");
         }
@@ -292,6 +395,7 @@ impl Main {
                 let mut new_pos = self.drag_start + (widget_pos + self.drag_widget_start);
                 new_pos.y = 0.0;
                 self.terrain.set_local_position(new_pos);
+                self.quakes.set_local_position(new_pos);
             }
         }
 
@@ -300,6 +404,9 @@ impl Main {
         }
 
         self.terrain.update(sk);
+
+        self.quakes.update(sk);
+
         Ok(())
     }
 
@@ -316,12 +423,12 @@ impl Main {
             sk.model_get_bounds(&self.pedestal_model),
         );
 
-        sk.render_add_model(
+        /* sk.render_add_model(
             &self.pedestal_model,
             Mat4::from_scale(Vec3::ONE * pedestal_scale),
             named_colors::WHITE,
             RenderLayer::LAYER0,
-        );
+        ); */
 
         // We've got a simple UI attached to the pedestal, just a list of
         // places we can display, and a scale slider. It'll face towards the
@@ -349,22 +456,18 @@ impl Main {
 
         let btn_size = Vec2::new(6.0, 3.0) * 0.01;
         if ui::radio("Kauai", self.location_id == Some(0), btn_size) {
-            dbg!("Location 0");
             new_location_id = Some(0);
         }
         ui::ui_sameline();
         if ui::radio("Grand Canyon", self.location_id == Some(1), btn_size) {
-            dbg!("Location 1");
             new_location_id = Some(1);
         }
         ui::ui_sameline();
         if ui::radio("Mt. Everest", self.location_id == Some(2), btn_size) {
-            dbg!("Location 2");
             new_location_id = Some(2);
         }
         ui::ui_sameline();
         if ui::radio("Machu Picchu", self.location_id == Some(3), btn_size) {
-            dbg!("Location 3");
             new_location_id = Some(3);
         }
 
@@ -406,6 +509,7 @@ impl Main {
 
         let geo_translation = self.terrain.get_local_position() / self.terrain_scale;
         self.terrain.set_local_position(geo_translation * new_scale);
+        self.quakes.set_local_position(geo_translation * new_scale);
 
         self.terrain_scale = new_scale;
     }
